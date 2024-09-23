@@ -17,7 +17,7 @@
 # frozen_string_literal: true
 
 require 'money'
-require 'httparty'
+require 'faraday'
 
 class Money
   module RatesProvider
@@ -29,8 +29,7 @@ class Money
     # It is fetching rates for all currencies in one request, as we are charged on a
     # "per date" basis. I.e. one month's data for all currencies counts as 30 calls.
     class OpenExchangeRates
-      include HTTParty
-      base_uri 'https://openexchangerates.org/api'
+      attr_accessor :client
 
       # minimum date that OER has data
       # (https://docs.openexchangerates.org/docs/historical-json)
@@ -51,11 +50,21 @@ class Money
       def initialize(oer_app_id, base_currency, timeout, oer_account_type)
         @oer_app_id = oer_app_id
         @base_currency_code = base_currency.iso_code
-        @timeout = timeout
         @fetch_rates_method_name = if oer_account_type == AccountType::FREE || oer_account_type == AccountType::DEVELOPER
           :fetch_historical_rates
         else
           :fetch_time_series_rates
+        end
+
+        @client = Faraday.new({
+          url: 'https://openexchangerates.org/api/',
+          request: {
+            timeout: timeout,
+            open_timeout: timeout,
+          },
+        }) do |f|
+          f.request :json
+          f.response :json
         end
       end
 
@@ -96,7 +105,7 @@ class Money
         # sample response can be found in spec/fixtures.
         # we're transforming the response from Hash[iso_date][iso_currency] to
         # Hash[iso_currency][iso_date], as it will allow more efficient caching/retrieving
-        response['rates'].each do |iso_date, day_rates|
+        response.body['rates'].each do |iso_date, day_rates|
           day_rates.each do |iso_currency, rate|
             result[iso_currency][iso_date] = rate.to_d
           end
@@ -110,27 +119,27 @@ class Money
 
       # the API doesn't allow fetching more than a month's data.
       def fetch_time_series_rates(date)
-        options = request_options
+        params = default_params
 
         end_of_month = Date.civil(date.year, date.month, -1)
         start_date = Date.civil(date.year, date.month, 1)
         end_date = [end_of_month, max_date].min
-        options[:query][:start] = start_date
-        options[:query][:end] = end_date
+        params[:start] = start_date
+        params[:end] = end_date
 
-        response = self.class.get('/time-series.json', options)
+        response = client.get('time-series.json', params)
 
         unless response.success?
           raise RequestFailed, "Month rates request failed for #{date} - "\
                                "Code: #{response.code} - Body: #{response.body}"
         end
-        response        
+        response
       end
 
       def fetch_historical_rates(date)
         date_string = date.iso8601
-        options = request_options
-        response = self.class.get("/historical/#{date_string}.json", options)
+        params = default_params
+        response = client.get("historical/#{date_string}.json", params)
 
         unless response.success?
           raise RequestFailed, "Historical rates request failed for #{date} - "\
@@ -138,23 +147,20 @@ class Money
         end
 
         # Making the return value comply to the same structure returned from the #fetch_month_rates method (/time-series.json API)
-        { 
+        {
           'start_date' => date_string,
           'end_date' => date_string,
-          'base' => response['base'],
+          'base' => response.body['base'],
           'rates' => {
-            date_string => response['rates']
-          }
+            date_string => response.body['rates'],
+          },
         }
       end
 
-      def request_options
-        options = {
-          query: {
-            app_id:  @oer_app_id,
-            base:    @base_currency_code
-          },
-          timeout: @timeout
+      def default_params
+        {
+          app_id:  @oer_app_id,
+          base:    @base_currency_code,
         }
       end
 

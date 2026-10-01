@@ -131,7 +131,7 @@ class Money
 
         unless response.success?
           raise RequestFailed, "Month rates request failed for #{date} - "\
-                               "Code: #{response.code} - Body: #{response.body}"
+                               "Code: #{response.status} - Body: #{response.body}"
         end
         response
       end
@@ -143,7 +143,7 @@ class Money
 
         unless response.success?
           raise RequestFailed, "Historical rates request failed for #{date} - "\
-                               "Code: #{response.code} - Body: #{response.body}"
+                               "Code: #{response.status} - Body: #{response.body}"
         end
 
         # Making the return value comply to the same structure returned from the #fetch_month_rates method (/time-series.json API)
